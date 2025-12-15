@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-This project implements Feedforward Neural Networks (FFN) to classify music tracks as "Pop" or "Non-pop" based on Spotify metadata and audio features. The models use a dataset of 40,000 tracks with various features including popularity, release year, tempo, audio characteristics, and genre information.
+This project classifies tracks as **Pop** or **Non-pop** using Spotify metadata, audio features, safe genre signals, and a **stacking ensemble** (XGBoost, LightGBM, GradientBoosting, CatBoost, and a balanced neural net). The ensemble outperforms any single model.
 
 ## Dataset
 
@@ -12,171 +12,28 @@ This project implements Feedforward Neural Networks (FFN) to classify music trac
 - **Train/Val/Test Split:** 85% / 10% / 5% (34,000 / 4,000 / 2,000)
 - **Class Distribution:** ~16% Pop, ~84% Non-pop (imbalanced dataset)
 
-## Feature Engineering
+## Feature Engineering (non-leaky)
 
-### Features Used (45 total)
+- **Numeric & audio:** popularity, year, tempo, explicit flag, position, danceability, energy, valence, acousticness, time_of_day dummies.
+- **Derived:** is_highly_popular, is_moderately_popular, popularity_normalized, is_recent, is_very_recent, decade, tempo_normalized, is_daytime, is_not_explicit.
+- **Safe genre TF-IDF:** up to 15 tokens with “pop” keywords removed to avoid leakage.
+- **Excluded (leaky):** has_pop_genre, popular_recent, mainstream_pop_signal, tempo_is_pop_range, genre_count.
 
-#### 1. Base Numeric Features (8)
-- `spotify_popularity` - Track popularity score (0-100)
-- `album_release_year` - Year of album release
-- `tempo_bpm_synth` - Tempo in beats per minute
-- `position` - Track position in playlist/album
-- `danceability` - How suitable for dancing (0-1)
-- `energy` - Perceptual intensity (0-1)
-- `valence` - Musical positiveness (0-1)
-- `acousticness` - Confidence track is acoustic (0-1)
+## Models
 
-#### 2. Derived Features (8)
-- `is_highly_popular` - Popularity > 70
-- `is_moderately_popular` - Popularity 50-70
-- `popularity_normalized` - Normalized popularity
-- `is_recent` - Released 2020+
-- `is_very_recent` - Released 2022+
-- `tempo_normalized` - Normalized tempo
-- `is_daytime` - Played during day/afternoon
-- `is_not_explicit` - Non-explicit content flag
+- **Model 1: Base FFN** — minimal (4 core features: popularity, year, tempo, explicit).  
+- **Model 2: Light FFN** — base + audio (danceability, energy, valence, acousticness).  
+- **Model 3: Higher FFN** — all non-leaky numeric + safe genre TF-IDF.  
+- **Smart Ensemble (best):** stacking of XGBoost, LightGBM, GradientBoosting, CatBoost (optional), and a balanced neural net, with XGBoost as meta-learner.
 
-#### 3. Interaction Features (2)
-- `popularity_x_year` - Popularity × Release Year
-- `tempo_x_year` - Tempo × Release Year
+## Training Configuration (current)
 
-#### 4. Temporal Features (2)
-- `release_month` - Month of release
-- `release_decade` - Decade of release
-
-#### 5. Categorical Features (4)
-- `time_of_day_synth` - One-hot encoded (morning, afternoon, evening, night)
-
-#### 6. Safe Genre Features (20)
-- TF-IDF features from genre text with "pop" keywords removed
-- Prevents data leakage while capturing genre patterns
-- Examples: "rock", "country", "hip hop", "jazz", "latin", etc.
-
-### Data Leakage Prevention
-
-**Removed Features (to prevent leakage):**
-- ❌ `tempo_is_pop_range` - Directly targets pop BPM range
-- ❌ `mainstream_pop_signal` - Engineered to predict pop
-- ❌ `popular_recent` - Composite feature targeting pop
-- ❌ `has_pop_genre` - Directly from genre column
-- ❌ Genre TF-IDF with "pop" keywords - Would leak target information
-
-**Safe Genre Features:**
-- ✅ Genre TF-IDF with "pop" keywords removed
-- ✅ Captures genre patterns without direct leakage
-
-## Model Architectures
-
-### Model 1: Shallow FFN
-**Architecture:**
-```
-Input (45 features)
-  ↓
-Dense(64) + ReLU
-  ↓
-Dropout(0.3)
-  ↓
-Dense(32) + ReLU
-  ↓
-Dropout(0.2)
-  ↓
-Output (1) + Sigmoid
-```
-
-**Characteristics:**
-- Simple 2-layer architecture
-- Fast training
-- Good baseline performance
-- Total parameters: ~3,000
-
-### Model 2: Medium FFN ⭐ (Best Performing)
-**Architecture:**
-```
-Input (45 features)
-  ↓
-Dense(128) + ReLU + L2(1e-4)
-  ↓
-BatchNormalization
-  ↓
-Dropout(0.4)
-  ↓
-Dense(64) + ReLU + L2(1e-4)
-  ↓
-BatchNormalization
-  ↓
-Dropout(0.3)
-  ↓
-Dense(32) + ReLU
-  ↓
-Dropout(0.2)
-  ↓
-Output (1) + Sigmoid
-```
-
-**Characteristics:**
-- 3 hidden layers with BatchNorm
-- L2 regularization on first 2 layers
-- Best F1-Score: 0.6667
-- Best ROC AUC: 0.9417
-- Total parameters: ~15,000
-
-### Model 3: Deep FFN (Optimized)
-**Architecture:**
-```
-Input (45 features)
-  ↓
-Dense(128) + ReLU + L2(5e-5)
-  ↓
-BatchNormalization
-  ↓
-Dropout(0.3)
-  ↓
-Dense(96) + ReLU + L2(5e-5)
-  ↓
-BatchNormalization
-  ↓
-Dropout(0.25)
-  ↓
-Dense(64) + ReLU + L2(5e-5)
-  ↓
-BatchNormalization
-  ↓
-Dropout(0.2)
-  ↓
-Dense(32) + ReLU
-  ↓
-Dropout(0.15)
-  ↓
-Output (1) + Sigmoid
-```
-
-**Characteristics:**
-- 4 hidden layers with BatchNorm
-- Reduced regularization (optimized to prevent underfitting)
-- Progressive dropout rates (0.3 → 0.25 → 0.2 → 0.15)
-- Lighter L2 regularization (5e-5)
-- Total parameters: ~25,000
-
-## Training Configuration
-
-### Common Settings
-- **Optimizer:** Adam (lr=0.001, beta_1=0.9, beta_2=0.999)
-- **Loss:** Binary Cross-Entropy
-- **Metrics:** Accuracy, Precision, Recall
-- **Batch Size:** 256
-- **Max Epochs:** 150
-- **Class Weights:** Balanced (handles imbalanced dataset)
-
-### Callbacks
-- **Early Stopping:** 
-  - Patience: 20 epochs (Model 1 & 2), 25 epochs (Model 3)
-  - Monitor: `val_loss`
-  - Restores best weights
-- **Learning Rate Reduction:**
-  - Factor: 0.5
-  - Patience: 8 epochs (Model 1 & 2), 10 epochs (Model 3)
-  - Min LR: 1e-7
-- **Model Checkpoint:** Saves best model based on `val_loss`
+- **Feature selection:** top-25 non-leaky features via ANOVA F-score.  
+- **Balancing:** SMOTE to 50/50 for boosters and NN.  
+- **Boosters:** tuned XGBoost / LightGBM / GradientBoosting; CatBoost optional.  
+- **Neural net:** trained on SMOTE-balanced data with BN + Dropout.  
+- **Meta-learner:** XGBoost stacking over base model probabilities (fallback: logistic regression).  
+- **Primary metric:** ROC AUC; we also track accuracy, precision, recall, F1.
 
 ## Data Preprocessing
 
@@ -194,20 +51,16 @@ Output (1) + Sigmoid
    - Stratified split to maintain class distribution
    - 85% train, 10% validation, 5% test
 
-## Model Performance
+## Test Set Performance (latest)
 
-### Test Set Results
+| Model | ROC AUC |
+| --- | --- |
+| Model 1: Base | 0.673 |
+| Model 2: Light | 0.681 |
+| Model 3: Higher | 0.739 |
+| **Smart Ensemble (SMOTE Model)** | **0.774** |
 
-| Model | Accuracy | Precision | Recall | F1-Score | ROC AUC |
-|-------|----------|-----------|--------|----------|---------|
-| Model 1: Shallow FFN | 0.753 | 0.372 | 0.779 | 0.504 | 0.866 |
-| **Model 2: Medium FFN** | **0.872** | **0.573** | **0.798** | **0.667** | **0.942** |
-| Model 3: Deep FFN | 0.850 | 0.553 | 0.355 | 0.433 | 0.801 |
-
-**🏆 Best Model: Model 2 (Medium FFN)**
-- Best overall performance
-- Good balance between precision and recall
-- Highest ROC AUC score
+**🏆 Best Model:** Smart Ensemble (SMOTE Model) — stacking with XGBoost meta-learner.
 
 ## Key Design Decisions
 
@@ -261,35 +114,21 @@ Kyle_solanki_Music/
 └── best_model*.h5                            # Saved model checkpoints
 ```
 
-## Notes for Partners
+## Architecture Understanding (current best)
 
-### Architecture Understanding
-
-1. **Input Layer:** 45 features (all preprocessed and scaled)
-2. **Hidden Layers:** 
-   - ReLU activation for non-linearity
-   - BatchNormalization for stable training
-   - Dropout for regularization
-3. **Output Layer:** Single neuron with sigmoid (binary classification)
-
-### Why Model 2 Performs Best
-
-- **Optimal Complexity:** Not too simple (Model 1) or too complex (Model 3)
-- **Good Regularization:** Prevents overfitting while allowing learning
-- **Feature Utilization:** Effectively uses all 45 features
-
-### Model 3 Issues (Fixed)
-
-- **Original Problem:** Too much regularization → stopped at epoch 2
-- **Fix:** Reduced dropout rates, smaller first layer, lighter L2
-- **Result:** Now trains properly with better patience settings
+- Inputs: all non-leaky numeric + safe genre TF-IDF; top-25 selected.  
+- Base models: XGBoost, LightGBM, GradientBoosting, CatBoost (optional), balanced FFN.  
+- Meta-learner: XGBoost over base-model probabilities (fallback: logistic regression).  
+- Balancing: SMOTE for boosters and NN.  
+- Threshold: default 0.5; adjust per precision/recall needs.
 
 ## Future Improvements
 
-1. **Hyperparameter Tuning:** Grid search for optimal learning rates, dropout rates
-2. **Feature Engineering:** Additional interaction features
-3. **Ensemble Methods:** Combine predictions from all 3 models
-4. **Threshold Optimization:** Find optimal classification threshold (not just 0.5)
+1. Tune top-k features and booster hyperparameters.  
+2. Add SHAP for explainability.  
+3. Further threshold optimization per business need.  
+4. Calibrated stacking (Platt/Isotonic) if required.  
+5. Multi-class: extend beyond Pop/Non-pop.
 
 ## Contact
 
@@ -297,6 +136,6 @@ For questions about the architecture or implementation, refer to the notebook co
 
 ---
 
-**Last Updated:** December 2024
-**Notebook Version:** Optimized with safe genre features and fixed Model 3
+**Last Updated:** December 2025  
+**Notebook Version:** Smart Ensemble with stacking + SMOTE + safe genre TF-IDF
 
